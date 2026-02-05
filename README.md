@@ -1,73 +1,93 @@
-# Welcome to your Lovable project
+# Medipal
 
-## Project info
+A modern medical application built with React, TypeScript, and Supabase.
 
-**URL**: https://lovable.dev/projects/9442c5d1-3c2e-4c04-97f3-783936352a2c
+## 🚀 Features
 
-## How can I edit this code?
+- Modern, responsive UI built with React and shadcn-ui components
+- Real-time database with Supabase
+- Type-safe development with TypeScript
+- Fast development experience with Vite
 
-There are several ways of editing your application.
+## 🛠️ Tech Stack
 
-**Use Lovable**
+- **Frontend Framework:** React 18
+- **Build Tool:** Vite 5
+- **Language:** TypeScript
+- **Styling:** Tailwind CSS
+- **UI Components:** shadcn-ui (Radix UI primitives)
+- **Backend:** Supabase
+- **State Management:** TanStack React Query
+- **Routing:** React Router DOM
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/9442c5d1-3c2e-4c04-97f3-783936352a2c) and start prompting.
+## 📋 Prerequisites
 
-Changes made via Lovable will be committed automatically to this repo.
+Before you begin, ensure you have the following installed:
+- [Node.js](https://nodejs.org/) (v16 or higher)
+- npm (comes with Node.js) or [Bun](https://bun.sh/)
 
-**Use your preferred IDE**
+## 🔧 Setup & Installation
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+1. **Clone the repository**
+   ```sh
+   git clone <YOUR_GIT_URL>
+   cd medipal
+   ```
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+2. **Install dependencies**
+   ```sh
+   npm install
+   ```
 
-Follow these steps:
+3. **Set up environment variables**
+   
+   Create a `.env` file in the root directory and add your Supabase credentials:
+   ```env
+   VITE_SUPABASE_URL=your_supabase_url
+   VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+   ```
+
+4. **Start the development server**
+   ```sh
+   npm run dev
+   ```
+
+   The app will be running at `http://localhost:5173`
+
+## 📜 Available Scripts
+
+- `npm run dev` - Start development server
+- `npm run build` - Build for production
+- `npm run build:dev` - Build for development environment
+- `npm run preview` - Preview production build locally
+- `npm run lint` - Run ESLint
+
+## 🌐 Deployment
+
+Build the production bundle:
 
 ```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
+npm run build
 ```
 
-**Edit a file directly in GitHub**
+The production-ready files will be in the `dist/` directory. You can deploy these to any static hosting service like Vercel, Netlify, or GitHub Pages.
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+## 💡 Development Tips
 
-**Use GitHub Codespaces**
+- The project uses **shadcn-ui** components - they can be customized in the `components/` directory
+- Supabase configuration is in the `supabase/` directory
+- Tailwind configuration can be found in `tailwind.config.ts`
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+## 🤝 Contributing
 
-## What technologies are used for this project?
+Contributions are welcome! Here's how you can contribute:
 
-This project is built with:
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+## 📄 License
 
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/9442c5d1-3c2e-4c04-97f3-783936352a2c) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+MIT License - see LICENSE file for details
