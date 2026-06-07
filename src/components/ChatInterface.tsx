@@ -5,7 +5,6 @@ import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Send, Bot, User, AlertTriangle, Info, Mic, MicOff, Volume2, VolumeX } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
 
 interface Message {
   id: string;
@@ -248,14 +247,22 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ onScheduleAppointm
         content: msg.content
       }));
 
-      const { data, error } = await supabase.functions.invoke('medical-chat', {
-        body: { 
+      const response = await fetch('/api/chat/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
           message: currentInput,
           conversationHistory: conversationHistory
-        }
+        }),
       });
 
-      if (error) throw error;
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
+      
+      const data = await response.json();
 
       const parsed = parseAssistantContent(data.response || '');
       const botResponse: Message = {
