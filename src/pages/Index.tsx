@@ -4,38 +4,22 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChatInterface } from '@/components/ChatInterface';
 import { SpecialistRecommendation } from '@/components/SpecialistRecommendation';
 import { MedicalDisclaimer } from '@/components/MedicalDisclaimer';
-import { Stethoscope, MessageCircle, Calendar, Shield, Brain, Heart } from 'lucide-react';
+import { DataIngestion } from '@/components/DataIngestion';
+import { Stethoscope, MessageCircle, Calendar, Shield, Brain, Heart, Database } from 'lucide-react';
 import heroImage from '@/assets/medical-ai-hero.jpg';
 
 const Index = () => {
-  const [currentView, setCurrentView] = useState<'home' | 'chat' | 'specialists' | 'disclaimer'>('home');
+  const [currentView, setCurrentView] = useState<'home' | 'chat' | 'specialists' | 'disclaimer' | 'ingestion'>('home');
+  const [selectedSpecialty, setSelectedSpecialty] = useState<string | null>(null);
 
-  const mockSpecialists = [
-    {
-      id: '1',
-      name: 'Dr. Sarah Chen',
-      specialty: 'Internal Medicine',
-      rating: 4.9,
-      availability: 'Next available: Tomorrow 2:00 PM',
-      location: 'Medical Center Downtown',
-      distance: '2.3 miles',
-      acceptsInsurance: true,
-      urgencyLevel: 'routine' as const,
-    },
-    {
-      id: '2',
-      name: 'Dr. Michael Rodriguez',
-      specialty: 'Emergency Medicine',
-      rating: 4.8,
-      availability: 'Available now',
-      location: 'City General Hospital',
-      distance: '1.1 miles',
-      acceptsInsurance: true,
-      urgencyLevel: 'urgent' as const,
-    },
-  ];
 
   const handleScheduleAppointment = () => {
+    setSelectedSpecialty(null);
+    setCurrentView('specialists');
+  };
+
+  const handleFindSpecialist = (specialty: string) => {
+    setSelectedSpecialty(specialty);
     setCurrentView('specialists');
   };
 
@@ -54,7 +38,10 @@ const Index = () => {
             </Button>
             <h1 className="text-3xl font-bold text-foreground">AI Health Assistant</h1>
           </div>
-          <ChatInterface onScheduleAppointment={handleScheduleAppointment} />
+          <ChatInterface
+            onScheduleAppointment={handleScheduleAppointment}
+            onFindSpecialist={handleFindSpecialist}
+          />
         </div>
       </div>
     );
@@ -70,7 +57,7 @@ const Index = () => {
             </Button>
           </div>
           <SpecialistRecommendation 
-            specialists={mockSpecialists}
+            selectedSpecialty={selectedSpecialty}
             onSchedule={handleSpecialistSchedule}
           />
         </div>
@@ -89,6 +76,25 @@ const Index = () => {
             <h1 className="text-3xl font-bold text-foreground mb-2">Medical Information & Privacy</h1>
           </div>
           <MedicalDisclaimer />
+        </div>
+      </div>
+    );
+  }
+
+  if (currentView === 'ingestion') {
+    return (
+      <div className="min-h-screen bg-background p-4">
+        <div className="max-w-3xl mx-auto">
+          <div className="mb-6 text-center">
+            <Button variant="outline" onClick={() => setCurrentView('home')} className="mb-4">
+              ← Back to Home
+            </Button>
+            <h1 className="text-3xl font-bold text-foreground">Admin Data Ingestion</h1>
+            <p className="text-muted-foreground mt-2">
+              Upload medical documents to enrich the AI knowledge base.
+            </p>
+          </div>
+          <DataIngestion />
         </div>
       </div>
     );
@@ -136,6 +142,15 @@ const Index = () => {
                 Privacy & Safety
               </Button>
             </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setCurrentView('ingestion')}
+              className="mt-6 text-white/80 hover:text-white hover:bg-white/10"
+            >
+              <Database className="mr-2 h-4 w-4" />
+              Admin: Upload Medical Documents
+            </Button>
           </div>
         </div>
       </section>

@@ -1,0 +1,6 @@
+CONDITION: Acute Viral Pharyngitis (Sore Throat)
+SYMPTOMS: Scratchy throat, pain when swallowing, mild cough, low-grade fever (below 101°F/38.3°C).
+RED FLAGS (URGENT CARE): Difficulty breathing, inability to swallow liquids, drooling, fever above 103°F (39.4°C), severe unilateral neck swelling.
+ASSESSMENT: Most cases are viral and do not require antibiotics. The focus is on symptom management.
+NEXT STEPS: Rest voice, stay hydrated. If symptoms persist beyond 7-10 days or red flags appear, consult an ENT specialist or general physician.
+SELF-CARE: Warm salt water gargles (1/2 teaspoon salt in a glass of warm water) 3-4 times a day. Over-the-counter lozenges. Paracetamol for fever and pain relief. Avoid spicy or highly acidic foods.

@@ -10,3 +10,8 @@ pydantic-settings
 python-dotenv
 passlib[bcrypt]
 python-jose[cryptography]
+python-multipart
+langchain-ollama
+langchain-text-splitters
+langchain-community
+pypdf

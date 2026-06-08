@@ -1,0 +1,16 @@
+services:
+  db:
+    image: pgvector/pgvector:pg15
+    container_name: medipal-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: medipal_user
+      POSTGRES_PASSWORD: S@njubro123
+      POSTGRES_DB: medipal_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:

@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
-import { Send, Bot, User, AlertTriangle, Info, Mic, MicOff, Volume2, VolumeX } from 'lucide-react';
+import { Send, Bot, User, AlertTriangle, Info, Mic, MicOff, Volume2, VolumeX, Stethoscope } from 'lucide-react';
 
 interface Message {
   id: string;
@@ -16,9 +16,38 @@ interface Message {
 
 interface ChatInterfaceProps {
   onScheduleAppointment?: () => void;
+  onFindSpecialist?: (specialty: string) => void;
 }
 
-export const ChatInterface: React.FC<ChatInterfaceProps> = ({ onScheduleAppointment }) => {
+// ---------------------------------------------------------------------------
+// Specialty detection – matches specialties seeded in the database
+// ---------------------------------------------------------------------------
+const KNOWN_SPECIALTIES = [
+  'General Physician',
+  'ENT Specialist',
+  'Cardiologist',
+  'Dermatologist',
+  'Pediatrician',
+  'Orthopedic Surgeon',
+  'Neurologist',
+  'ENT',
+];
+
+/**
+ * Scan bot message text for a known specialty (case-insensitive).
+ * Returns the first match or null.
+ */
+const detectSpecialty = (content: string): string | null => {
+  const lower = content.toLowerCase();
+  for (const specialty of KNOWN_SPECIALTIES) {
+    if (lower.includes(specialty.toLowerCase())) {
+      return specialty;
+    }
+  }
+  return null;
+};
+
+export const ChatInterface: React.FC<ChatInterfaceProps> = ({ onScheduleAppointment, onFindSpecialist }) => {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
@@ -31,7 +60,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ onScheduleAppointm
   const [isTyping, setIsTyping] = useState(false);
   const [isCompleted, setIsCompleted] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
-  const [voiceEnabled, setVoiceEnabled] = useState<boolean>(true);
+  const [voiceEnabled, setVoiceEnabled] = useState<boolean>(false); // temporarily disabled
   const [isListening, setIsListening] = useState<boolean>(false);
   const recognitionRef = useRef<any>(null);
   const inputRef = useRef<string>('');
@@ -350,6 +379,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ onScheduleAppointm
                     </Badge>
                   </div>
                 )}
+                {message.type === 'bot' && detectSpecialty(message.content) && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-3 w-full gap-2 border-primary/30 text-primary hover:bg-primary/5"
+                    onClick={() => onFindSpecialist?.(detectSpecialty(message.content)!)}
+                  >
+                    <Stethoscope className="h-4 w-4" />
+                    Find a {detectSpecialty(message.content)} Near Me
+                  </Button>
+                )}
               </div>
               <p className="text-xs text-muted-foreground mt-1">
                 {message.timestamp.toLocaleTimeString()}
@@ -388,6 +428,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ onScheduleAppointm
       {/* Quick Actions */}
       <div className="p-3 border-t bg-muted/30">
         <div className="flex gap-2 mb-3">
+          {/* Voice & mic controls temporarily disabled
           <select
             className="border rounded px-2 py-1 text-sm"
             value={language}
@@ -398,28 +439,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ onScheduleAppointm
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>
+          */}
           <Button variant="soft" size="sm" onClick={onScheduleAppointment}>
             Schedule Appointment
           </Button>
           <Button variant="outline" size="sm">
             Emergency Info
-          </Button>
-          <Button
-            variant={voiceEnabled ? 'outline' : 'secondary'}
-            size="sm"
-            onClick={() => setVoiceEnabled((v) => !v)}
-            title={voiceEnabled ? 'Disable voice' : 'Enable voice'}
-          >
-            {voiceEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-          </Button>
-          <Button
-            variant={isListening ? 'secondary' : 'outline'}
-            size="sm"
-            onClick={toggleListening}
-            disabled={!canUseSTT}
-            title={canUseSTT ? (isListening ? 'Stop mic' : 'Start mic') : 'Speech recognition not supported'}
-          >
-            {isListening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
           </Button>
           <Button
             variant="outline"
