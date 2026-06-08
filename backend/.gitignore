@@ -1,7 +1,7 @@
+# Covered by root .gitignore; kept for editors opened at backend/
 __pycache__/
 *.py[cod]
-*$py.class
 .env
+.venv/
 venv/
 *.db
-*.sqlite3
