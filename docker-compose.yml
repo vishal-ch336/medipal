@@ -4,9 +4,9 @@ services:
     container_name: medipal-postgres
     restart: always
     environment:
-      POSTGRES_USER: medipal_user
-      POSTGRES_PASSWORD: S@njubro123
-      POSTGRES_DB: medipal_db
+      POSTGRES_USER: ${POSTGRES_USER:-medipal_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-medipal_db}
     ports:
       - "5432:5432"
     volumes:

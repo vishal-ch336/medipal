@@ -41,6 +41,7 @@ Desktop.ini
 *.njsproj
 *.sln
 *.sw?
+.cursor/
 
 # Python / FastAPI
 **/__pycache__/
@@ -56,21 +57,32 @@ Desktop.ini
 .mypy_cache/
 .ruff_cache/
 
-# Environment variables & secrets
+# Environment variables & secrets (never commit)
 .env
 .env.local
 .env.*.local
 **/.env
 **/.env.*
+!.env.example
+!**/.env.example
 
-# Runtime uploads (admin ingestion)
-backend/app/data/uploads/
+# Runtime uploads & large datasets (admin ingestion / imports)
+backend/app/data/uploads/*
+!backend/app/data/uploads/.gitkeep
+**/*.parquet
+**/*.parquet.*
 
 # Logs
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+uvicorn*.log
 
 # Docker (local overrides only)
 docker-compose.override.yml
+
+# Misc
+*.pem
+*.key
+credentials.json

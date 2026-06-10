@@ -1,6 +1,6 @@
 # Medipal — AI-Powered Healthcare Assistant
 
-**Medipal** is a fully local, privacy-first, decoupled healthcare intelligence platform. It combines a modern React single-page application with a FastAPI backend, PostgreSQL vector database, and on-device large language model inference via Ollama. No third-party cloud AI APIs are required—clinical reference data, embeddings, and generative responses remain under your operational control.
+**Medipal** is a privacy-first, fully local healthcare intelligence platform. A React single-page app talks to a FastAPI backend, PostgreSQL with **pgvector**, and on-device inference via **Ollama**. Clinical reference data, embeddings, and generative responses stay under your control—no third-party cloud AI APIs required.
 
 ---
 
@@ -8,11 +8,12 @@
 
 | Capability | Description |
 |------------|-------------|
-| **Real-time symptom chat** | Interactive conversational interface with streaming LLM responses over a persistent WebSocket connection (`/chat/ws`), plus an HTTP fallback endpoint for synchronous replies. |
-| **Local RAG pipeline** | Retrieval-Augmented Generation powered by `pgvector` cosine similarity search over ingested medical documents, grounded by Ollama `llama3.2`. |
-| **Specialist recommendation** | Dynamic provider matching from a PostgreSQL `specialists` table, filterable by medical specialty with urgency and availability metadata. |
-| **Admin document ingestion** | Asynchronous web upload portal supporting **PDF**, **CSV**, **TXT**, and **Markdown**—with background chunking, embedding, and persistence via FastAPI `BackgroundTasks`. |
-| **JWT authentication** | User registration and token-based auth endpoints (backend-ready for future frontend integration). |
+| **JWT authentication** | Register, login, and protected routes with role-based access (`user` / `admin`). |
+| **Real-time symptom chat** | Streaming WebSocket chat (`/chat/ws`) with persistent message history. |
+| **Local RAG pipeline** | pgvector cosine search over ingested medical documents, grounded by Ollama `llama3.2`. |
+| **Clinical citations** | Retrieved source chunks surfaced as citation badges beneath each AI reply. |
+| **Specialist recommendation** | Provider matching from PostgreSQL, filterable by specialty. |
+| **Admin document ingestion** | Drag-and-drop upload for **PDF**, **CSV**, **TXT**, and **Markdown** with background chunking and embedding. |
 
 ---
 
@@ -20,196 +21,179 @@
 
 | Layer | Technologies |
 |-------|--------------|
-| **Frontend** | React 18, Vite 8, TypeScript 5, Tailwind CSS 3, shadcn/ui (Radix UI), TanStack Query 5, React Router 6, Lucide React |
-| **Backend** | FastAPI, Uvicorn, Pydantic v2, SQLAlchemy 2.0 (async), Alembic, python-jose, passlib |
-| **Database** | PostgreSQL 15 with **pgvector** extension (Docker: `pgvector/pgvector:pg15`) |
-| **AI / ML** | Ollama (`llama3.2` chat, `nomic-embed-text` embeddings), LangChain (`langchain-ollama`, `langchain-text-splitters`) |
-| **Infrastructure** | Docker Compose, asyncpg, pgvector Python bindings |
+| **Frontend** | React 18, Vite 8, TypeScript, Tailwind CSS, shadcn/ui, TanStack Query, React Router, Axios |
+| **Backend** | FastAPI, Uvicorn, Pydantic v2, SQLAlchemy 2.0 (async), Alembic, bcrypt, python-jose |
+| **Database** | PostgreSQL 15 + **pgvector** (`pgvector/pgvector:pg15`) |
+| **AI / ML** | Ollama (`llama3.2`, `nomic-embed-text`), LangChain |
+| **Infrastructure** | Docker Compose, asyncpg |
 
 ---
 
 ## System Architecture
 
-### High-Level Component Diagram
-
 ```mermaid
 graph TD
     subgraph Client["Frontend (React + Vite :8080)"]
-        UI[ChatInterface / DataIngestion / SpecialistRecommendation]
-        Proxy[Vite Dev Proxy /api → :8000]
+        UI[Chat / Admin / Specialists]
+        Proxy[Vite Proxy /api → :8000]
     end
 
     subgraph API["FastAPI Backend (:8000)"]
-        REST[REST Routers<br/>/chat /admin /specialists /auth]
-        WS[WebSocket /chat/ws]
-        RAG[ai_service.py — RAG Orchestrator]
-        ING[ingestion_service.py — Document Pipeline]
+        AUTH[/auth — JWT]
+        CHAT[/chat — REST + WebSocket]
+        ADMIN[/admin — Upload]
+        RAG[rag.py — Vector Retrieval]
+        AI[ai_service.py — XML RAG Prompt]
+        ING[ingestion_service.py]
     end
 
-    subgraph Data["Docker PostgreSQL (:5432)"]
+    subgraph Data["PostgreSQL (:5432)"]
         PG[(medipal_db)]
-        VEC[pgvector — medical_documents]
-        SPEC[(specialists)]
-        USR[(users)]
+        VEC[medical_documents + pgvector]
+        MSG[chat_messages]
+        USR[users]
+        SPEC[specialists]
     end
 
-    subgraph LocalAI["Ollama (localhost:11434)"]
-        LLM[llama3.2 — Chat Generation]
-        EMB[nomic-embed-text — 768-dim Embeddings]
+    subgraph LocalAI["Ollama (:11434)"]
+        LLM[llama3.2]
+        EMB[nomic-embed-text]
     end
 
     UI --> Proxy
-    Proxy --> REST
-    UI -.->|WebSocket streaming| WS
-    REST --> RAG
-    REST --> ING
-    WS --> RAG
+    UI -.->|ws://localhost:8000/chat/ws| CHAT
+    Proxy --> AUTH
+    Proxy --> CHAT
+    Proxy --> ADMIN
+    CHAT --> RAG
+    CHAT --> AI
     RAG --> EMB
-    RAG --> LLM
     RAG --> VEC
+    AI --> LLM
     ING --> EMB
     ING --> VEC
-    REST --> SPEC
-    REST --> USR
-    VEC --> PG
-    SPEC --> PG
-    USR --> PG
+    AUTH --> USR
+    CHAT --> MSG
 ```
 
-### RAG Chat Message Flow
+### RAG + Citation Flow
 
 ```mermaid
-flowchart LR
-    A[User sends message] --> B[WebSocket Reception<br/>/chat/ws]
-    B --> C[Query Vectorization<br/>nomic-embed-text]
-    C --> D[pgvector Similarity Search<br/>TOP_K cosine distance]
-    D --> E[Context Injection<br/>System prompt + retrieved chunks]
-    E --> F[Ollama Streaming Generation<br/>llama3.2]
-    F --> G[Token-by-token emission<br/>to client]
-    G --> H[UI renders streaming response]
-    F --> I[[DONE] sentinel]
+sequenceDiagram
+    participant U as User (Browser)
+    participant WS as WebSocket /chat/ws
+    participant RAG as rag.py
+    participant DB as pgvector
+    participant AI as ai_service.py
+    participant O as Ollama
+
+    U->>WS: User message + JWT
+    WS->>DB: Save user ChatMessage
+    WS->>RAG: retrieve_relevant_context()
+    RAG->>O: Embed query (nomic-embed-text)
+    RAG->>DB: Cosine similarity search
+    RAG-->>WS: context + source metadata
+    WS->>AI: generate_medical_response_stream()
+    AI->>O: XML-sandboxed prompt + context
+    O-->>WS: Stream tokens
+    WS-->>U: Stream AI text
+    WS-->>U: {"type":"sources","data":[...]}
+    WS-->>U: [DONE]
+    WS->>DB: Save AI ChatMessage
 ```
 
 ---
 
-## Project Directory Structure
+## Project Structure
 
 ```
 medipal/
-├── alembic/                          # Database migration environment
-│   ├── versions/                     # Revision scripts (initial schema + pgvector)
-│   └── env.py                        # Async Alembic configuration
-├── alembic.ini
-├── docker-compose.yml                # PostgreSQL + pgvector container
-├── package.json                      # Frontend dependencies & scripts
-├── vite.config.ts                    # Vite dev server + /api proxy
-├── tailwind.config.ts
-├── tsconfig.json
+├── alembic/                    # Database migrations
+├── docker-compose.yml          # PostgreSQL + pgvector
+├── .env.example                # Docker DB credentials template
+├── LICENSE
+├── package.json
+├── vite.config.ts              # Dev server + /api proxy
 │
-├── src/                              # React frontend
+├── src/                        # React frontend
 │   ├── components/
-│   │   ├── ChatInterface.tsx         # Symptom assessment chat UI
-│   │   ├── DataIngestion.tsx         # Admin drag-and-drop upload portal
-│   │   ├── SpecialistRecommendation.tsx
-│   │   ├── MedicalDisclaimer.tsx
-│   │   └── ui/                       # shadcn/ui component library
-│   ├── pages/
-│   │   ├── Index.tsx                 # Landing page + view router
-│   │   └── NotFound.tsx
-│   ├── hooks/
-│   ├── lib/
-│   ├── App.tsx
-│   └── main.tsx
+│   │   ├── ChatInterface.tsx   # WebSocket chat + citations
+│   │   ├── DataIngestion.tsx   # Admin upload UI
+│   │   ├── ProtectedRoute.tsx
+│   │   └── AppNavbar.tsx
+│   ├── context/AuthContext.tsx
+│   ├── pages/                  # Index, Chat, Login, Register, Admin
+│   └── lib/auth.ts
 │
 └── backend/
-    ├── .env                          # Runtime secrets (not committed)
+    ├── .env.example            # API secrets template
     ├── requirements.txt
     └── app/
-        ├── main.py                   # FastAPI application entry point
-        ├── settings.py               # Pydantic settings loader
-        ├── core/
-        │   └── database.py           # Async SQLAlchemy engine + session
-        ├── models/
-        │   ├── user.py
-        │   ├── specialist.py
-        │   └── document.py           # MedicalDocument + Vector(768)
-        ├── routers/
-        │   ├── chat.py               # POST /chat/ + WebSocket /chat/ws
-        │   ├── admin.py              # POST /admin/upload
-        │   ├── specialists.py        # GET /specialists/
-        │   └── auth.py               # POST /auth/register, /auth/token
+        ├── main.py
+        ├── routers/            # auth, chat, admin, specialists
         ├── services/
-        │   ├── ai_service.py         # RAG streaming pipeline
-        │   └── ingestion_service.py  # Multi-format document ingestion
-        ├── scripts/
-        │   ├── ingest_data.py        # CLI bulk directory ingestion
-        │   └── seed_specialists.py   # Idempotent specialist seeding
+        │   ├── rag.py          # Vector retrieval + citations
+        │   ├── ai_service.py   # XML prompt + response sanitization
+        │   └── ingestion_service.py
+        ├── models/             # User, MedicalDocument, ChatMessage, Specialist
+        ├── scripts/            # ingest_data, seed_specialists
         └── data/
-            ├── sample_guidelines.txt # Example RAG source document
-            └── uploads/              # Web-uploaded files (runtime)
+            ├── sample_guidelines.txt
+            └── uploads/        # Runtime uploads (gitignored)
 ```
 
 ---
 
-## Setup & Installation
+## Quick Start
 
 ### Prerequisites
 
-Install the following before proceeding:
+1. [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+2. [Ollama](https://ollama.com/)
+3. **Node.js 18+** and **npm**
+4. **Python 3.11+** (3.13 supported; uses native `bcrypt`, not passlib)
 
-1. **[Docker Desktop](https://www.docker.com/products/docker-desktop/)** — runs the PostgreSQL + pgvector container.
-2. **[Ollama](https://ollama.com/)** — serves local LLM and embedding models.
-3. **Node.js 18+** and **npm** — frontend toolchain.
-4. **Python 3.11+** — backend runtime.
-
-Pull required Ollama models:
+Pull Ollama models:
 
 ```bash
 ollama pull llama3.2
 ollama pull nomic-embed-text
-```
-
-Ensure Ollama is running:
-
-```bash
 ollama serve
 ```
 
 ---
 
-### Step 1 — Database (Docker + Environment)
+### 1. Clone & configure environment
 
-From the project root, start PostgreSQL:
+```bash
+git clone https://github.com/vishal-ch336/medipal.git
+cd medipal
+
+# Docker database credentials
+cp .env.example .env
+
+# FastAPI runtime secrets
+cp backend/.env.example backend/.env
+```
+
+Edit both files and set a strong `POSTGRES_PASSWORD` / matching `DATABASE_URL` password and a random `SECRET_KEY`.
+
+> **Never commit `.env` files.** They are listed in `.gitignore`.
+
+---
+
+### 2. Start the database
 
 ```bash
 docker compose up -d
 ```
 
-Create `backend/.env` with credentials matching `docker-compose.yml`:
-
-```env
-DATABASE_URL=postgresql+asyncpg://medipal_user:YOUR_PASSWORD@localhost:5432/medipal_db
-SECRET_KEY=generate_a_secure_random_jwt_signing_key
-ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=30
-```
-
-> **Note:** Replace `YOUR_PASSWORD` with the `POSTGRES_PASSWORD` value defined in `docker-compose.yml`.
-
-The `pgvector` extension is enabled automatically by the Alembic initial migration (`CREATE EXTENSION IF NOT EXISTS vector`). To verify manually:
-
-```bash
-docker exec -it medipal-postgres psql -U medipal_user -d medipal_db -c "CREATE EXTENSION IF NOT EXISTS vector;"
-```
-
 ---
 
-### Step 2 — Backend
+### 3. Backend
 
 ```bash
 cd backend
-
-# Create and activate a virtual environment
 python -m venv .venv
 
 # Windows (PowerShell)
@@ -218,27 +202,19 @@ python -m venv .venv
 # macOS / Linux
 source .venv/bin/activate
 
-# Install dependencies
 pip install -r requirements.txt
-
-# Run async database migrations
 alembic upgrade head
-
-# Seed specialist reference data (optional, idempotent)
 python -m app.scripts.seed_specialists
-
-# Ingest sample medical guidelines (optional)
 python -m app.scripts.ingest_data --dir app/data/
 
-# Launch the API server
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-API documentation is available at [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs).
+API docs: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
 
 ---
 
-### Step 3 — Frontend
+### 4. Frontend
 
 From the project root:
 
@@ -247,41 +223,53 @@ npm install
 npm run dev
 ```
 
-The application is served at [http://localhost:8080](http://localhost:8080). API requests to `/api/*` are proxied to the FastAPI backend on port `8000`.
+App: [http://localhost:8080](http://localhost:8080)
 
-| Route | Purpose |
-|-------|---------|
-| `/` | Landing page, chat, specialists, disclaimer |
-| Hero → **Admin: Upload Medical Documents** | Admin ingestion dashboard |
+| Route | Access | Purpose |
+|-------|--------|---------|
+| `/` | Public | Landing page |
+| `/register` | Public | Create account |
+| `/login` | Public | Sign in |
+| `/chat` | Authenticated | Symptom chat with citations |
+| `/admin` | Admin only | Document ingestion |
+
+**Local dev networking:** REST calls use the Vite proxy (`/api/*` → `:8000`). The chat WebSocket connects directly to `ws://localhost:8000/chat/ws?token=...`.
 
 ---
 
-## API Reference (Summary)
+## API Reference
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/chat/` | Synchronous RAG chat (JSON request/response) |
-| `WS` | `/chat/ws` | Streaming RAG chat (token-by-token + `[DONE]`) |
-| `GET` | `/specialists/` | List specialists (`?specialty=` filter) |
-| `POST` | `/admin/upload` | Upload document for background ingestion |
-| `POST` | `/auth/register` | Create user account |
-| `POST` | `/auth/token` | Obtain JWT access token |
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `POST` | `/auth/register` | — | Create user |
+| `POST` | `/auth/token` | — | Obtain JWT |
+| `GET` | `/auth/me` | Bearer | Current user profile |
+| `POST` | `/chat/` | — | Synchronous RAG reply |
+| `WS` | `/chat/ws?token=` | JWT query param | Streaming chat + citations |
+| `GET` | `/chat/history` | Bearer | User chat history |
+| `POST` | `/admin/upload` | Admin Bearer | Upload document for ingestion |
+| `GET` | `/specialists/` | — | List specialists (`?specialty=`) |
 
-Frontend proxy mapping: `http://localhost:8080/api/chat/` → `http://127.0.0.1:8000/chat/`
+### WebSocket message protocol
+
+1. Client sends plain-text user message.
+2. Server streams AI response tokens.
+3. Server sends `{"type":"sources","data":[{"id":"...","title":"..."}]}`.
+4. Server sends `[DONE]`.
 
 ---
 
 ## Operational Scripts
 
 ```bash
-# Bulk-ingest all supported files from a directory (CLI)
+# Bulk-ingest supported files from a directory
 python -m app.scripts.ingest_data --dir app/data/
 
-# Seed mock Chennai-area healthcare providers
+# Seed mock specialist data (idempotent)
 python -m app.scripts.seed_specialists
 ```
 
-Supported ingestion formats: `.txt`, `.md`, `.pdf`, `.csv`.
+Supported formats: `.txt`, `.md`, `.pdf`, `.csv`.
 
 ---
 
@@ -289,9 +277,9 @@ Supported ingestion formats: `.txt`, `.md`, `.pdf`, `.csv`.
 
 ```bash
 # Frontend
-npm run dev          # Start Vite dev server (:8080)
-npm run build        # Production build
-npm run lint         # ESLint
+npm run dev
+npm run build
+npm run lint
 
 # Backend
 uvicorn app.main:app --reload
@@ -301,16 +289,54 @@ alembic upgrade head
 
 ---
 
+## Pushing to GitHub
+
+1. Ensure secrets are not tracked:
+
+   ```bash
+   git status
+   ```
+
+   Confirm `.env`, `backend/.env`, `node_modules/`, `dist/`, and `backend/app/data/uploads/*` are ignored.
+
+2. Stage and commit:
+
+   ```bash
+   git add .
+   git commit -m "Prepare repository for public release"
+   ```
+
+3. Push (requires write access to the remote):
+
+   ```bash
+   git push origin main
+   ```
+
+If push is rejected due to permissions, fork the repository or update the remote:
+
+```bash
+git remote set-url origin https://github.com/YOUR_USERNAME/medipal.git
+git push -u origin main
+```
+
+---
+
+## Security Notes
+
+- Default Docker password in `.env.example` is a placeholder—change it before deploying.
+- CORS is set to `allow_origins=["*"]` for local development only.
+- This project is **not** HIPAA-compliant or clinically validated.
+
+---
+
 ## Medical Disclaimer
 
 > **IMPORTANT — NOT FOR CLINICAL USE**
 >
-> Medipal is provided strictly for **educational and personal demonstration purposes**. The AI-generated symptom assessments, health information, and specialist recommendations produced by this software **do not constitute professional medical advice, diagnosis, or treatment**. The system has not been validated for clinical accuracy, regulatory compliance (including HIPAA), or use in emergency or life-threatening situations.
->
-> **Always consult a qualified, licensed healthcare provider** for medical decisions. If you are experiencing a medical emergency, contact your local emergency services immediately. The authors and contributors of this project accept no liability for any health outcomes resulting from use of this software.
+> Medipal is provided for **educational and demonstration purposes** only. AI-generated information **does not constitute professional medical advice, diagnosis, or treatment**. Always consult a licensed healthcare provider. In an emergency, contact local emergency services immediately.
 
 ---
 
 ## License
 
-MIT License — see repository for details.
+[MIT License](LICENSE)
