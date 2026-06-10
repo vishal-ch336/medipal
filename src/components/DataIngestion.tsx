@@ -1,5 +1,6 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -10,8 +11,12 @@ import {
   CheckCircle2,
   AlertCircle,
   X,
+  LogOut,
+  Shield,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { authHeaders } from '@/lib/auth';
+import { useAuth } from '@/context/AuthContext';
 
 const UPLOAD_URL = '/api/admin/upload';
 
@@ -24,16 +29,30 @@ const isAcceptedFile = (file: File): boolean => {
   return ACCEPTED_EXTENSIONS.includes(ext as (typeof ACCEPTED_EXTENSIONS)[number]);
 };
 
+const formatFileSize = (bytes: number): string => {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
 export const DataIngestion: React.FC = () => {
+  const { user, token, logout } = useAuth();
   const inputRef = useRef<HTMLInputElement>(null);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const isAdmin = !!user && user.role === 'admin';
+
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [status, setStatus] = useState<UploadStatus>('idle');
   const [isDragOver, setIsDragOver] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
+  const handleLogout = () => {
+    logout();
+    resetState();
+  };
+
   const resetState = () => {
-    setSelectedFile(null);
+    setSelectedFiles([]);
     setStatus('idle');
     setErrorMessage(null);
     setSuccessMessage(null);
@@ -42,23 +61,52 @@ export const DataIngestion: React.FC = () => {
     }
   };
 
-  const handleFile = useCallback((file: File | null) => {
-    if (!file) return;
+  const handleFiles = useCallback((incomingFiles: FileList | File[]) => {
+    const files = Array.from(incomingFiles);
+    if (files.length === 0) return;
 
-    if (!isAcceptedFile(file)) {
-      setErrorMessage(
-        `Unsupported file type. Please upload ${ACCEPTED_EXTENSIONS.join(', ')} files only.`,
-      );
-      setStatus('error');
-      setSelectedFile(null);
-      return;
+    const accepted: File[] = [];
+    const rejected: string[] = [];
+
+    for (const file of files) {
+      if (isAcceptedFile(file)) {
+        accepted.push(file);
+      } else {
+        rejected.push(file.name);
+      }
     }
 
-    setSelectedFile(file);
-    setStatus('selected');
-    setErrorMessage(null);
-    setSuccessMessage(null);
+    if (rejected.length > 0) {
+      setErrorMessage(
+        `Skipped unsupported file(s): ${rejected.join(', ')}. Supported: ${ACCEPTED_EXTENSIONS.join(', ')}`,
+      );
+    } else {
+      setErrorMessage(null);
+    }
+
+    if (accepted.length > 0) {
+      setSelectedFiles((prev) => {
+        const existing = new Set(prev.map((f) => `${f.name}_${f.size}_${f.lastModified}`));
+        const unique = accepted.filter(
+          (f) => !existing.has(`${f.name}_${f.size}_${f.lastModified}`),
+        );
+        return [...prev, ...unique];
+      });
+      setStatus('selected');
+      setSuccessMessage(null);
+    }
   }, []);
+
+  const removeFile = (index: number) => {
+    setSelectedFiles((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      if (next.length === 0) {
+        setStatus('idle');
+        setErrorMessage(null);
+      }
+      return next;
+    });
+  };
 
   const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -77,48 +125,71 @@ export const DataIngestion: React.FC = () => {
     event.stopPropagation();
     setIsDragOver(false);
 
-    const file = event.dataTransfer.files?.[0];
-    if (file) {
-      handleFile(file);
+    const files = event.dataTransfer.files;
+    if (files && files.length > 0) {
+      handleFiles(files);
     }
   };
 
   const handleInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      handleFile(file);
+    const files = event.target.files;
+    if (files && files.length > 0) {
+      handleFiles(files);
+    }
+    if (inputRef.current) {
+      inputRef.current.value = '';
     }
   };
 
   const handleUpload = async () => {
-    if (!selectedFile) return;
+    if (selectedFiles.length === 0) return;
+
+    if (!token || !isAdmin) {
+      setErrorMessage('Please sign in as an administrator before uploading.');
+      setStatus('error');
+      return;
+    }
 
     setStatus('uploading');
     setErrorMessage(null);
     setSuccessMessage(null);
 
     const formData = new FormData();
-    formData.append('file', selectedFile);
+    for (const file of selectedFiles) {
+      formData.append('files', file);
+    }
 
     try {
       const response = await fetch(UPLOAD_URL, {
         method: 'POST',
+        headers: authHeaders(),
         body: formData,
       });
+
+      if (response.status === 401) {
+        logout();
+        throw new Error('Session expired. Please sign in again.');
+      }
+
+      if (response.status === 403) {
+        throw new Error('Only administrators have access to this resource.');
+      }
 
       if (!response.ok) {
         const errorBody = await response.json().catch(() => null);
         const detail =
           typeof errorBody?.detail === 'string'
             ? errorBody.detail
-            : `Upload failed with status ${response.status}`;
+            : typeof errorBody?.detail?.message === 'string'
+              ? errorBody.detail.message
+              : `Upload failed with status ${response.status}`;
         throw new Error(detail);
       }
 
       const data = await response.json();
       setStatus('success');
       setSuccessMessage(
-        data.message ?? 'File uploaded successfully. Ingestion started in background.',
+        data.message ?? `${selectedFiles.length} file(s) uploaded successfully. Ingestion started in background.`,
       );
     } catch (error) {
       setStatus('error');
@@ -128,19 +199,62 @@ export const DataIngestion: React.FC = () => {
     }
   };
 
+  const totalSize = selectedFiles.reduce((sum, f) => sum + f.size, 0);
+
+  if (!user || !isAdmin) {
+    return (
+      <Card className="shadow-medical border-primary/10">
+        <CardHeader>
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-primary">
+              <Shield className="h-5 w-5 text-white" />
+            </div>
+            <div>
+              <CardTitle className="text-xl">Administrator access required</CardTitle>
+              <CardDescription>
+                {user
+                  ? 'Your account does not have permission to upload documents.'
+                  : 'Sign in with an admin account to upload documents.'}
+              </CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3 sm:flex-row">
+          {!user && (
+            <Button variant="medical" asChild>
+              <Link to="/login">Sign in</Link>
+            </Button>
+          )}
+          {user && (
+            <Button variant="outline" onClick={handleLogout}>
+              <LogOut className="h-4 w-4" />
+              Sign out
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <Card className="shadow-medical border-primary/10">
       <CardHeader>
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-primary">
-            <Upload className="h-5 w-5 text-white" />
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-primary">
+              <Upload className="h-5 w-5 text-white" />
+            </div>
+            <div>
+              <CardTitle className="text-xl">Medical Document Ingestion</CardTitle>
+              <CardDescription>
+                Upload clinical guidelines and reference documents into the RAG knowledge base.
+              </CardDescription>
+            </div>
           </div>
-          <div>
-            <CardTitle className="text-xl">Medical Document Ingestion</CardTitle>
-            <CardDescription>
-              Upload clinical guidelines and reference documents into the RAG knowledge base.
-            </CardDescription>
-          </div>
+          <Button variant="outline" size="sm" onClick={handleLogout} className="shrink-0">
+            <LogOut className="h-4 w-4" />
+            Sign out
+          </Button>
         </div>
       </CardHeader>
 
@@ -173,6 +287,7 @@ export const DataIngestion: React.FC = () => {
             accept={ACCEPTED_EXTENSIONS.join(',')}
             onChange={handleInputChange}
             disabled={status === 'uploading'}
+            multiple
           />
 
           <div
@@ -189,10 +304,10 @@ export const DataIngestion: React.FC = () => {
           </div>
 
           <p className="text-lg font-semibold text-foreground">
-            {isDragOver ? 'Drop your file here' : 'Drag & drop a document'}
+            {isDragOver ? 'Drop your files here' : 'Drag & drop documents'}
           </p>
           <p className="mt-2 max-w-md text-sm text-muted-foreground">
-            or click to browse. Supported formats: TXT, Markdown, PDF, and CSV.
+            or click to browse. Select multiple files at once. Supported formats: TXT, Markdown, PDF, and CSV.
           </p>
 
           <div className="mt-4 flex flex-wrap justify-center gap-2">
@@ -204,28 +319,60 @@ export const DataIngestion: React.FC = () => {
           </div>
         </div>
 
-        {selectedFile && status !== 'idle' && (
-          <div className="flex items-center justify-between rounded-lg border bg-white p-4 shadow-card">
-            <div className="flex items-center gap-3">
-              <FileText className="h-5 w-5 text-primary" />
-              <div className="text-left">
-                <p className="text-sm font-medium text-foreground">
-                  {status === 'selected' && `${selectedFile.name} selected`}
-                  {status === 'uploading' && `Uploading ${selectedFile.name}…`}
-                  {status === 'success' && `${selectedFile.name} uploaded`}
-                  {status === 'error' && selectedFile.name}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {(selectedFile.size / 1024).toFixed(1)} KB
-                </p>
-              </div>
+        {selectedFiles.length > 0 && status !== 'idle' && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between px-1">
+              <p className="text-sm font-medium text-muted-foreground">
+                {selectedFiles.length} file{selectedFiles.length !== 1 ? 's' : ''} selected
+                <span className="ml-2 text-xs">({formatFileSize(totalSize)} total)</span>
+              </p>
+              {status === 'selected' && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={resetState}
+                  className="h-auto px-2 py-1 text-xs text-muted-foreground hover:text-destructive"
+                >
+                  Clear all
+                </Button>
+              )}
             </div>
 
-            {status === 'selected' && (
-              <Button variant="ghost" size="icon" onClick={resetState} aria-label="Clear file">
-                <X className="h-4 w-4" />
-              </Button>
-            )}
+            <div className="max-h-[240px] space-y-1.5 overflow-y-auto rounded-lg border bg-white p-2 shadow-card">
+              {selectedFiles.map((file, index) => (
+                <div
+                  key={`${file.name}_${file.size}_${file.lastModified}`}
+                  className="flex items-center justify-between rounded-md px-3 py-2 transition-colors hover:bg-muted/50"
+                >
+                  <div className="flex items-center gap-3 overflow-hidden">
+                    <FileText className="h-4 w-4 shrink-0 text-primary" />
+                    <div className="overflow-hidden text-left">
+                      <p className="truncate text-sm font-medium text-foreground">
+                        {file.name}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {formatFileSize(file.size)}
+                      </p>
+                    </div>
+                  </div>
+
+                  {status === 'selected' && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 shrink-0"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeFile(index);
+                      }}
+                      aria-label={`Remove ${file.name}`}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
@@ -248,25 +395,25 @@ export const DataIngestion: React.FC = () => {
         <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
           {(status === 'success' || status === 'error') && (
             <Button variant="outline" onClick={resetState}>
-              Upload another file
+              Upload more files
             </Button>
           )}
 
           <Button
             variant="medical"
             onClick={handleUpload}
-            disabled={!selectedFile || status === 'uploading' || status === 'success'}
+            disabled={selectedFiles.length === 0 || status === 'uploading' || status === 'success'}
             className="min-w-[160px]"
           >
             {status === 'uploading' ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
-                Uploading…
+                Uploading {selectedFiles.length} file{selectedFiles.length !== 1 ? 's' : ''}…
               </>
             ) : (
               <>
                 <Upload className="h-4 w-4" />
-                Start Ingestion
+                Start Ingestion{selectedFiles.length > 1 ? ` (${selectedFiles.length})` : ''}
               </>
             )}
           </Button>

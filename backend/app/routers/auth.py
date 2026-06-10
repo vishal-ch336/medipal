@@ -6,6 +6,8 @@ from app.schemas import Token, User, UserCreate
 from app.crud import get_user_by_email, create_user
 from app.dependencies import verify_password, create_access_token
 from app.core.database import get_db
+from app.core.security import get_current_user
+from app.models.user import User as UserModel
 
 router = APIRouter()
 
@@ -16,6 +18,11 @@ async def register(user: UserCreate, db: AsyncSession = Depends(get_db)):
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
     return await create_user(db, user)
+
+
+@router.get("/me", response_model=User)
+async def read_current_user(current_user: UserModel = Depends(get_current_user)):
+    return current_user
 
 
 @router.post("/token", response_model=Token)

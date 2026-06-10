@@ -1,10 +1,17 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import axios from 'axios';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
-import { Send, Bot, User, AlertTriangle, Info, Mic, MicOff, Volume2, VolumeX, Stethoscope } from 'lucide-react';
+import { Send, Bot, User, AlertTriangle, Info, Stethoscope, BookOpen } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
+
+interface CitationSource {
+  id: string;
+  title: string;
+}
 
 interface Message {
   id: string;
@@ -12,6 +19,19 @@ interface Message {
   content: string;
   timestamp: Date;
   severity?: 'low' | 'medium' | 'high' | 'emergency';
+  sources?: CitationSource[];
+}
+
+interface SourcesPayload {
+  type: 'sources';
+  data: CitationSource[];
+}
+
+interface ChatHistoryRecord {
+  id: string;
+  sender: 'user' | 'ai';
+  content: string;
+  created_at: string;
 }
 
 interface ChatInterfaceProps {
@@ -19,9 +39,14 @@ interface ChatInterfaceProps {
   onFindSpecialist?: (specialty: string) => void;
 }
 
-// ---------------------------------------------------------------------------
-// Specialty detection – matches specialties seeded in the database
-// ---------------------------------------------------------------------------
+const WELCOME_MESSAGE: Message = {
+  id: 'welcome',
+  type: 'bot',
+  content:
+    "Hello! I'm your AI health assistant. I'm here to help you understand your symptoms and guide you to appropriate care. Please describe what symptoms you're experiencing today.",
+  timestamp: new Date(),
+};
+
 const KNOWN_SPECIALTIES = [
   'General Physician',
   'ENT Specialist',
@@ -33,10 +58,6 @@ const KNOWN_SPECIALTIES = [
   'ENT',
 ];
 
-/**
- * Scan bot message text for a known specialty (case-insensitive).
- * Returns the first match or null.
- */
 const detectSpecialty = (content: string): string | null => {
   const lower = content.toLowerCase();
   for (const specialty of KNOWN_SPECIALTIES) {
@@ -47,290 +68,230 @@ const detectSpecialty = (content: string): string | null => {
   return null;
 };
 
-export const ChatInterface: React.FC<ChatInterfaceProps> = ({ onScheduleAppointment, onFindSpecialist }) => {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      type: 'bot',
-      content: "Hello! I'm your AI health assistant. I'm here to help you understand your symptoms and guide you to appropriate care. Please describe what symptoms you're experiencing today.",
-      timestamp: new Date(),
-    }
-  ]);
+const parseAssistantContent = (raw: string): { mode: 'question' | 'solution'; text: string } => {
+  const trimmed = raw.trim();
+  if (trimmed.toLowerCase().startsWith('question:')) {
+    return { mode: 'question', text: trimmed.replace(/^[Qq]uestion:\s*/, '') };
+  }
+  if (trimmed.toLowerCase().startsWith('solution:')) {
+    return { mode: 'solution', text: trimmed.replace(/^[Ss]olution:\s*/, '') };
+  }
+  return { mode: 'question', text: trimmed };
+};
+
+const mapHistoryToMessages = (records: ChatHistoryRecord[]): Message[] =>
+  records.map((record) => ({
+    id: record.id,
+    type: record.sender === 'user' ? 'user' : 'bot',
+    content:
+      record.sender === 'ai'
+        ? parseAssistantContent(record.content).text
+        : record.content,
+    timestamp: new Date(record.created_at),
+    severity: record.sender === 'ai' ? 'low' : undefined,
+  }));
+
+export const ChatInterface: React.FC<ChatInterfaceProps> = ({
+  onScheduleAppointment,
+  onFindSpecialist,
+}) => {
+  const { token } = useAuth();
+  const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
   const [inputValue, setInputValue] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [isCompleted, setIsCompleted] = useState(false);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
-  const [voiceEnabled, setVoiceEnabled] = useState<boolean>(false); // temporarily disabled
-  const [isListening, setIsListening] = useState<boolean>(false);
-  const recognitionRef = useRef<any>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const streamingBotIdRef = useRef<string | null>(null);
+  const scrollAfterHistoryRef = useRef(false);
   const inputRef = useRef<string>('');
-  const [language, setLanguage] = useState<string>('auto');
-  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
-  const languageOptions: { value: string; label: string }[] = [
-    { value: 'auto', label: 'Auto (detect)' },
-    { value: 'en-IN', label: 'English (India)' },
-    { value: 'hi-IN', label: 'Hindi (हिन्दी)' },
-    { value: 'bn-IN', label: 'Bengali (বাংলা)' },
-    { value: 'ta-IN', label: 'Tamil (தமிழ்)' },
-    { value: 'te-IN', label: 'Telugu (తెలుగు)' },
-    { value: 'mr-IN', label: 'Marathi (मराठी)' },
-    { value: 'gu-IN', label: 'Gujarati (ગુજરાતી)' },
-    { value: 'kn-IN', label: 'Kannada (ಕನ್ನಡ)' },
-    { value: 'ml-IN', label: 'Malayalam (മലയാളം)' },
-    { value: 'pa-IN', label: 'Punjabi (ਪੰਜਾਬੀ)' },
-    { value: 'ur-IN', label: 'Urdu (اُردو)' },
-  ];
-  const effectiveLang = useMemo(() => (language === 'auto' ? (typeof navigator !== 'undefined' ? (navigator as any).language || 'en-IN' : 'en-IN') : language), [language]);
-  const canUseTTS = typeof window !== 'undefined' && 'speechSynthesis' in window;
-  const canUseSTT = useMemo(() => {
-    if (typeof window === 'undefined') return false;
-    return 'SpeechRecognition' in window || 'webkitSpeechRecognition' in window;
-  }, []);
 
-  // Load available TTS voices and keep in state
+  // Fetch persistent chat history on mount
   useEffect(() => {
-    if (!canUseTTS) return;
-    const loadVoices = () => setVoices(window.speechSynthesis.getVoices());
-    loadVoices();
-    window.speechSynthesis.onvoiceschanged = loadVoices;
-    return () => {
-      if (window.speechSynthesis.onvoiceschanged === loadVoices) {
-        window.speechSynthesis.onvoiceschanged = null as any;
-      }
-    };
-  }, [canUseTTS]);
-
-  const selectVoiceForLang = (langCode: string): SpeechSynthesisVoice | null => {
-    if (!voices || voices.length === 0) return null;
-    const lc = langCode.toLowerCase();
-    // Strongly prefer Indian locale variants when possible (e.g., en-IN, hi-IN)
-    const preferIndian = (v: SpeechSynthesisVoice) => (
-      v.lang?.toLowerCase().endsWith('-in') || v.name.toLowerCase().includes('india')
-    );
-    // If English requested, bias to en-IN first
-    if (lc.startsWith('en')) {
-      const enInExact = voices.find(v => v.lang?.toLowerCase() === 'en-in');
-      if (enInExact) return enInExact;
-      const enInGoogle = voices.find(v => v.name.toLowerCase().includes('google') && v.lang?.toLowerCase() === 'en-in');
-      if (enInGoogle) return enInGoogle;
-      const anyEnIndian = voices.find(v => v.lang?.toLowerCase().startsWith('en') && preferIndian(v));
-      if (anyEnIndian) return anyEnIndian;
+    if (!token) {
+      setIsLoadingHistory(false);
+      return;
     }
-    // Prefer exact locale match
-    const exact = voices.find(v => v.lang?.toLowerCase() === lc);
-    if (exact) return exact;
-    // Prefer same language prefix (e.g., hi-*)
-    const prefix = lc.split('-')[0];
-    const byPrefix = voices.find(v => v.lang?.toLowerCase().startsWith(prefix));
-    if (byPrefix) return byPrefix;
-    // Prefer Google voices if available for better fluency
-    const googleMatch = voices.find(v => v.name.toLowerCase().includes('google') && v.lang?.toLowerCase().startsWith(prefix));
-    if (googleMatch) return googleMatch;
-    // Fallback to en-IN or any English voice
-    const enIn = voices.find(v => v.lang?.toLowerCase() === 'en-in');
-    if (enIn) return enIn;
-    const anyEn = voices.find(v => v.lang?.toLowerCase().startsWith('en'));
-    return anyEn || null;
-  };
-  
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages, isTyping]);
-
-  // Speak latest bot message when voice is enabled
-  useEffect(() => {
-    if (!canUseTTS || !voiceEnabled) return;
-    const last = messages[messages.length - 1];
-    if (!last || last.type !== 'bot' || !last.content) return;
-    try {
-      const speakFluent = (text: string) => {
-        // Cancel any ongoing speech
-        window.speechSynthesis.cancel();
-
-        // Normalize bullets and whitespace to help prosody
-        const normalized = text
-          .replace(/\n\s*\n/g, '\n')
-          .replace(/^\s*-\s+/gm, '')
-          .replace(/\s+•\s+/g, ' ')
-          .replace(/\s{2,}/g, ' ')
-          .trim();
-
-        // Split into sentences using ., ?, !, Indic danda "।" and newlines
-        const parts = normalized
-          .split(/(?<=[\.\?\!।])\s+|\n+/)
-          .map(p => p.trim())
-          .filter(Boolean);
-
-        const langToUse = effectiveLang.toLowerCase().startsWith('en') ? 'en-IN' : effectiveLang;
-        const voice = selectVoiceForLang(langToUse);
-        const queue: SpeechSynthesisUtterance[] = parts.map((p, idx) => {
-          // Add slight pause by appending comma for short items
-          const u = new SpeechSynthesisUtterance(p);
-          u.lang = langToUse;
-          if (voice) u.voice = voice;
-          // Slightly slower for clarity; tweak for fluency
-          u.rate = 0.95;
-          u.pitch = 1.0;
-          u.volume = 1.0;
-          // Chain to next utterance
-          u.onend = () => {
-            const next = queue[idx + 1];
-            if (next) {
-              window.speechSynthesis.speak(next);
-            }
-          };
-          return u;
+    const loadHistory = async () => {
+      try {
+        const { data } = await axios.get<ChatHistoryRecord[]>('/api/chat/history', {
+          headers: { Authorization: `Bearer ${token}` },
         });
 
-        if (queue.length > 0) {
-          window.speechSynthesis.speak(queue[0]);
+        if (data.length > 0) {
+          setMessages(mapHistoryToMessages(data));
+          scrollAfterHistoryRef.current = true;
         }
-      };
+      } catch (error) {
+        console.error('Failed to load chat history:', error);
+      } finally {
+        setIsLoadingHistory(false);
+      }
+    };
 
-      speakFluent(last.content);
-    } catch {}
-  }, [messages, voiceEnabled, canUseTTS, effectiveLang, voices]);
+    loadHistory();
+  }, [token]);
 
-  // Cleanup on unmount
+  // Authenticated WebSocket connection
   useEffect(() => {
-    return () => {
-      try { if (canUseTTS) window.speechSynthesis.cancel(); } catch {}
-      try { recognitionRef.current?.stop(); } catch {}
-    };
-  }, [canUseTTS]);
+    if (!token) return;
 
-  const ensureRecognition = () => {
-    if (recognitionRef.current || !canUseSTT) return;
-    const SR: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) return;
-    const rec: any = new SR();
-    rec.lang = effectiveLang;
-    rec.interimResults = true;
-    rec.continuous = false;
-    rec.onresult = (event: any) => {
-      let transcript = '';
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        transcript += event.results[i][0].transcript;
+    const ws = new WebSocket(`ws://localhost:8000/chat/ws?token=${token}`);
+    wsRef.current = ws;
+
+    ws.onmessage = (event) => {
+      const chunk = event.data as string;
+
+      if (chunk === '[DONE]') {
+        const botId = streamingBotIdRef.current;
+        if (botId) {
+          setMessages((prev) =>
+            prev.map((message) => {
+              if (message.id !== botId) return message;
+              const parsed = parseAssistantContent(message.content);
+              return { ...message, content: parsed.text };
+            }),
+          );
+        }
+        streamingBotIdRef.current = null;
+        setIsTyping(false);
+        return;
       }
-      const finalText = transcript.trim();
-      inputRef.current = finalText;
-      setInputValue(finalText);
-    };
-    rec.onerror = () => setIsListening(false);
-    rec.onend = () => {
-      setIsListening(false);
-      // Auto-send captured speech if present
-      if (inputRef.current && inputRef.current.trim()) {
-        handleSendMessage();
+
+      try {
+        const payload = JSON.parse(chunk) as SourcesPayload;
+        if (payload.type === 'sources' && Array.isArray(payload.data)) {
+          const botId = streamingBotIdRef.current;
+          if (!botId) return;
+
+          setMessages((prev) =>
+            prev.map((message) =>
+              message.id === botId
+                ? { ...message, sources: payload.data }
+                : message,
+            ),
+          );
+          return;
+        }
+      } catch {
+        /* not a JSON control payload — treat as streamed text */
       }
-    };
-    recognitionRef.current = rec;
-  };
 
-  const toggleListening = () => {
-    if (!canUseSTT) return;
-    ensureRecognition();
-    const rec = recognitionRef.current;
-    if (!rec) return;
-    if (isListening) {
-      try { rec.stop(); } catch {}
-      setIsListening(false);
-    } else {
-      try { window.speechSynthesis?.cancel(); } catch {}
-      try { rec.start(); setIsListening(true); } catch {}
-    }
-  };
+      const botId = streamingBotIdRef.current;
+      if (!botId) return;
 
-  const parseAssistantContent = (raw: string): { mode: 'question' | 'solution'; text: string } => {
-    const trimmed = raw.trim();
-    if (trimmed.toLowerCase().startsWith('question:')) {
-      return { mode: 'question', text: trimmed.replace(/^[Qq]uestion:\s*/,'') };
-    }
-    if (trimmed.toLowerCase().startsWith('solution:')) {
-      return { mode: 'solution', text: trimmed.replace(/^[Ss]olution:\s*/,'') };
-    }
-    // Fallback: treat as question to keep turn-taking
-    return { mode: 'question', text: trimmed };
-  };
-
-  const handleSendMessage = async () => {
-    if (!inputValue.trim() || isCompleted) return;
-
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      type: 'user',
-      content: inputValue,
-      timestamp: new Date(),
-    };
-
-    setMessages(prev => [...prev, userMessage]);
-    const currentInput = inputValue;
-    setInputValue('');
-    setIsTyping(true);
-
-    try {
-      // Get conversation history for context
-      const conversationHistory = messages.map(msg => ({
-        role: msg.type === 'user' ? 'user' : 'assistant',
-        content: msg.content
-      }));
-
-      const response = await fetch('/api/chat/', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          message: currentInput,
-          conversationHistory: conversationHistory
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
-      }
-      
-      const data = await response.json();
-
-      const parsed = parseAssistantContent(data.response || '');
-      const botResponse: Message = {
-        id: (Date.now() + 1).toString(),
-        type: 'bot',
-        content: parsed.text,
-        timestamp: new Date(),
-        severity: data.severity || 'low',
-      };
-      
-      setMessages(prev => [...prev, botResponse]);
       setIsTyping(false);
-    } catch (error) {
-      console.error('Error sending message:', error);
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === botId
+            ? { ...message, content: message.content + chunk }
+            : message,
+        ),
+      );
+    };
+
+    ws.onerror = () => {
+      console.error('WebSocket connection error');
+    };
+
+    ws.onclose = (event) => {
+      if (event.code === 1008) {
+        console.error('WebSocket closed: invalid or expired token');
+      }
+      wsRef.current = null;
+      streamingBotIdRef.current = null;
+      setIsTyping(false);
+    };
+
+    return () => {
+      ws.close();
+      wsRef.current = null;
+    };
+  }, [token]);
+
+  // Auto-scroll on new messages and after history is painted
+  useEffect(() => {
+    const behavior = scrollAfterHistoryRef.current ? 'smooth' : 'smooth';
+    messagesEndRef.current?.scrollIntoView({ behavior, block: 'end' });
+    scrollAfterHistoryRef.current = false;
+  }, [messages, isTyping]);
+
+  const handleSendMessage = useCallback(async () => {
+    if (!inputValue.trim() || isCompleted || isTyping) return;
+
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
       const errorResponse: Message = {
-        id: (Date.now() + 1).toString(),
+        id: `error-${Date.now()}`,
         type: 'bot',
-        content: "I apologize, but I'm experiencing technical difficulties. Please try again or consult with a healthcare provider if you have urgent medical concerns.",
+        content:
+          "I'm having trouble connecting to the chat service. Please refresh the page and try again.",
         timestamp: new Date(),
         severity: 'medium',
       };
-      setMessages(prev => [...prev, errorResponse]);
-      setIsTyping(false);
+      setMessages((prev) => [...prev, errorResponse]);
+      return;
+    }
+
+    const userMessage: Message = {
+      id: `user-${Date.now()}`,
+      type: 'user',
+      content: inputValue.trim(),
+      timestamp: new Date(),
+    };
+
+    const botId = `bot-${Date.now()}`;
+    streamingBotIdRef.current = botId;
+
+    const botPlaceholder: Message = {
+      id: botId,
+      type: 'bot',
+      content: '',
+      timestamp: new Date(),
+      severity: 'low',
+    };
+
+    setMessages((prev) => [...prev, userMessage, botPlaceholder]);
+    setInputValue('');
+    inputRef.current = '';
+    setIsTyping(true);
+
+    ws.send(userMessage.content);
+  }, [inputValue, isCompleted, isTyping]);
+
+  const resetChat = () => {
+    streamingBotIdRef.current = null;
+    setMessages([WELCOME_MESSAGE]);
+    setIsCompleted(false);
+    setInputValue('');
+    inputRef.current = '';
+    setIsTyping(false);
+    try {
+      window.speechSynthesis?.cancel();
+    } catch {
+      /* ignore */
     }
   };
 
   const getSeverityColor = (severity?: string) => {
     switch (severity) {
-      case 'emergency': return 'destructive';
-      case 'high': return 'destructive';
-      case 'medium': return 'secondary';
-      case 'low': return 'accent';
-      default: return 'primary';
+      case 'emergency':
+        return 'destructive';
+      case 'high':
+        return 'destructive';
+      case 'medium':
+        return 'secondary';
+      case 'low':
+        return 'accent';
+      default:
+        return 'primary';
     }
   };
 
   return (
     <Card className="h-[600px] flex flex-col bg-gradient-card shadow-medical">
-      {/* Chat Header */}
       <div className="p-4 border-b bg-gradient-primary text-white rounded-t-lg">
         <div className="flex items-center gap-3">
           <Avatar>
@@ -340,12 +301,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ onScheduleAppointm
           </Avatar>
           <div>
             <h3 className="font-semibold">HealthAI Assistant</h3>
-            <p className="text-xs opacity-90">Medical Information</p>
+            <p className="text-xs opacity-90">
+              {isLoadingHistory ? 'Loading conversation…' : 'Medical Information'}
+            </p>
           </div>
         </div>
       </div>
 
-      {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.map((message) => (
           <div
@@ -359,7 +321,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ onScheduleAppointm
                 </AvatarFallback>
               </Avatar>
             )}
-            
+
             <div className={`max-w-[80%] ${message.type === 'user' ? 'order-first' : ''}`}>
               <div
                 className={`p-3 rounded-lg ${
@@ -368,18 +330,29 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ onScheduleAppointm
                     : 'bg-white border shadow-card'
                 }`}
               >
-                <p className="text-sm whitespace-pre-wrap">{message.content}</p>
-                {message.severity && (
+                <p className="text-sm whitespace-pre-wrap">
+                  {message.content ||
+                    (isTyping &&
+                    message.type === 'bot' &&
+                    message.id === messages[messages.length - 1]?.id
+                      ? '…'
+                      : '')}
+                </p>
+                {message.severity && message.content && (
                   <div className="mt-2 flex items-center gap-2">
                     <Info className="h-3 w-3" />
                     <Badge variant={getSeverityColor(message.severity)} className="text-xs">
-                      {message.severity === 'emergency' ? 'Seek immediate care' : 
-                       message.severity === 'high' ? 'Consult doctor soon' :
-                       message.severity === 'medium' ? 'Monitor symptoms' : 'Self-care possible'}
+                      {message.severity === 'emergency'
+                        ? 'Seek immediate care'
+                        : message.severity === 'high'
+                          ? 'Consult doctor soon'
+                          : message.severity === 'medium'
+                            ? 'Monitor symptoms'
+                            : 'Self-care possible'}
                     </Badge>
                   </div>
                 )}
-                {message.type === 'bot' && detectSpecialty(message.content) && (
+                {message.type === 'bot' && message.content && detectSpecialty(message.content) && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -391,6 +364,24 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ onScheduleAppointm
                   </Button>
                 )}
               </div>
+              {message.type === 'bot' && message.sources && message.sources.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {message.sources.map((source) => (
+                    <Badge
+                      key={source.id}
+                      variant="outline"
+                      title={`Source ID: ${source.id}`}
+                      className="cursor-pointer gap-1 border-primary/30 bg-primary/5 px-2 py-0.5 text-[11px] font-medium text-primary transition-colors hover:bg-primary/10"
+                      onClick={() =>
+                        console.info('Citation selected:', source.id, source.title)
+                      }
+                    >
+                      <BookOpen className="h-3 w-3 shrink-0" />
+                      {source.title}
+                    </Badge>
+                  ))}
+                </div>
+              )}
               <p className="text-xs text-muted-foreground mt-1">
                 {message.timestamp.toLocaleTimeString()}
               </p>
@@ -406,78 +397,40 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ onScheduleAppointm
           </div>
         ))}
 
-        {isTyping && (
-          <div className="flex items-center gap-3">
-            <Avatar className="w-8 h-8">
-              <AvatarFallback className="bg-primary text-white">
-                <Bot className="h-4 w-4" />
-              </AvatarFallback>
-            </Avatar>
-            <div className="bg-white border p-3 rounded-lg shadow-card">
-              <div className="flex gap-1">
-                <div className="w-2 h-2 bg-primary rounded-full animate-bounce"></div>
-                <div className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                <div className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
-              </div>
-            </div>
-          </div>
-        )}
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Quick Actions */}
       <div className="p-3 border-t bg-muted/30">
         <div className="flex gap-2 mb-3">
-          {/* Voice & mic controls temporarily disabled
-          <select
-            className="border rounded px-2 py-1 text-sm"
-            value={language}
-            onChange={(e) => setLanguage(e.target.value)}
-            title="Language for voice & mic"
-          >
-            {languageOptions.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-          */}
           <Button variant="soft" size="sm" onClick={onScheduleAppointment}>
             Schedule Appointment
           </Button>
           <Button variant="outline" size="sm">
             Emergency Info
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setMessages([{
-                id: '1',
-                type: 'bot',
-                content: "Hello! I'm your AI health assistant. I'm here to help you understand your symptoms and guide you to appropriate care. Please describe what symptoms you're experiencing today.",
-                timestamp: new Date(),
-              }]);
-              setIsCompleted(false);
-              setInputValue('');
-              try { window.speechSynthesis?.cancel(); } catch {}
-              try { recognitionRef.current?.stop(); } catch {}
-            }}
-          >
+          <Button variant="outline" size="sm" onClick={resetChat}>
             New Chat
           </Button>
         </div>
       </div>
 
-      {/* Input */}
       <div className="p-4 border-t">
         <div className="flex gap-2">
           <Input
             value={inputValue}
-            onChange={(e) => { setInputValue(e.target.value); inputRef.current = e.target.value; }}
-            placeholder={'Answer the question or describe your symptoms...'}
-            onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+            onChange={(e) => {
+              setInputValue(e.target.value);
+              inputRef.current = e.target.value;
+            }}
+            placeholder="Answer the question or describe your symptoms..."
+            onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
             className="flex-1"
+            disabled={isLoadingHistory}
           />
-          <Button onClick={handleSendMessage} disabled={!inputValue.trim() || isTyping}>
+          <Button
+            onClick={handleSendMessage}
+            disabled={!inputValue.trim() || isTyping || isLoadingHistory}
+          >
             <Send className="h-4 w-4" />
           </Button>
         </div>

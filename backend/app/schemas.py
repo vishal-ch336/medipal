@@ -40,6 +40,7 @@ class UserCreate(UserBase):
 class User(UserBase):
     id: UUID
     is_active: bool
+    role: str
 
     class Config:
         from_attributes = True
